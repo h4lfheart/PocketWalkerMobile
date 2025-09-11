@@ -99,7 +99,7 @@ Java_com_halfheart_pocketwalkerlib_PocketWalkerNative_onDraw(JNIEnv *env, jobjec
     CallbackManager::Instance().SetCallback(env, callback, "Draw");
 
     emulator->OnDraw([](uint8_t* data) {
-        auto size = Lcd::WIDTH * Lcd::HEIGHT * 3;
+        auto size = Lcd::WIDTH * Lcd::HEIGHT;
         jobject drawCallback = CallbackManager::Instance().GetCallback("Draw");
         if (drawCallback) {
             KotlinCallback::InvokeByteArrayCallback(drawCallback, data, size);
@@ -115,10 +115,10 @@ Java_com_halfheart_pocketwalkerlib_PocketWalkerNative_onAudio(JNIEnv *env, jobje
 
     CallbackManager::Instance().SetCallback(env, callback, "Audio");
 
-    emulator->OnAudio([](float freq) {
+    emulator->OnAudio([](AudioInformation audio) {
         jobject audioCallback = CallbackManager::Instance().GetCallback("Audio");
         if (audioCallback) {
-            KotlinCallback::InvokeFloatCallback(audioCallback, freq);
+            KotlinCallback::InvokeFunction2Callback<float, bool>(audioCallback, audio.frequency, audio.isFullVolume, KotlinCallback::FloatConverter(), KotlinCallback::BoolConverter());
         }
     });
 }
@@ -175,4 +175,11 @@ Java_com_halfheart_pocketwalkerlib_PocketWalkerNative_resume(JNIEnv *env, jobjec
     auto emulator = PocketWalkerState::Emulator();
 
     emulator->Resume();
+}
+extern "C"
+JNIEXPORT jbyte JNICALL
+Java_com_halfheart_pocketwalkerlib_PocketWalkerNative_getContrast(JNIEnv *env, jobject thiz) {
+    auto emulator = PocketWalkerState::Emulator();
+
+    return (jbyte) emulator->GetContrast();
 }

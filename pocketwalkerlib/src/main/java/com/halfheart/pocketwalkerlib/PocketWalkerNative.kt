@@ -13,12 +13,13 @@ class PocketWalkerNative {
     external fun resume()
 
     external fun onDraw(callback: (ByteArray) -> Unit)
-    external fun onAudio(callback: (Float) -> Unit)
+    external fun onAudio(callback: (Float, Boolean) -> Unit)
 
     external fun press(button: Int)
     external fun release(button: Int)
 
     external fun getEepromBuffer(): ByteArray
+    external fun getContrast(): Byte
 
     companion object {
         init {

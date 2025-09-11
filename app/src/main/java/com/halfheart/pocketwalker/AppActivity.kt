@@ -2,6 +2,9 @@ package com.halfheart.pocketwalker
 
 import AudioEngine
 import android.graphics.Bitmap
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -28,8 +31,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import com.halfheart.pocketwalkerlib.BUTTON_CENTER
@@ -37,13 +42,21 @@ import com.halfheart.pocketwalkerlib.BUTTON_LEFT
 import com.halfheart.pocketwalkerlib.BUTTON_RIGHT
 import com.halfheart.pocketwalkerlib.PocketWalkerNative
 import kotlinx.coroutines.delay
+import java.util.function.Function
 import kotlin.concurrent.thread
 
 
-class AppActivity : ComponentActivity() {
+class AppActivity : ComponentActivity()  {
     private var canvasBitmap by mutableStateOf<Bitmap?>(null)
 
     private lateinit var pokeWalker: PocketWalkerNative
+
+    private val palette = intArrayOf(
+        0xCCCCCC,
+        0x999999,
+        0x666666,
+        0x333333
+    )
 
     fun initializePokeWalker() {
         val romBytes = resources.openRawResource(R.raw.rom).readAllBytes()
@@ -64,9 +77,13 @@ class AppActivity : ComponentActivity() {
         }
 
         val audioEngine = AudioEngine()
-        pokeWalker.onAudio { freq ->
-            audioEngine.render(freq, 1.0f, 1.0f)
+
+        pokeWalker.onAudio { freq: Float, isFullVolume: Boolean ->
+            if (freq > 100)
+                println(freq)
+            audioEngine.render(freq, if (isFullVolume) 0.5f else 0.25f, 1.0f)
         }
+
 
         thread(priority = Thread.MAX_PRIORITY) {
             pokeWalker.start()
@@ -103,8 +120,37 @@ class AppActivity : ComponentActivity() {
         pokeWalker.resume()
     }
 
-    private fun createBitmap(rgb24Bytes: ByteArray): Bitmap {
+    private fun createBitmap(paletteIndices: ByteArray): Bitmap {
+        val width = 96
+        val height = 64
 
+        val contrast = pokeWalker.getContrast().toInt()
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val pixels = IntArray(width * height)
+
+        for (i in pixels.indices) {
+            var paletteIndex = paletteIndices[i].toInt() and 0xFF
+            if (paletteIndex >= palette.size) {
+                paletteIndex = 0
+            }
+
+            val color = palette[paletteIndex]
+            val r = (color shr 16) and 0xFF
+            val g = (color shr 8) and 0xFF
+            val b = color and 0xFF
+
+            val adjustedR = applyContrast(r, contrast)
+            val adjustedG = applyContrast(g, contrast)
+            val adjustedB = applyContrast(b, contrast)
+
+            pixels[i] = (0xFF shl 24) or (adjustedR shl 16) or (adjustedG shl 8) or adjustedB
+        }
+
+        bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
+        return bitmap
+    }
+
+    private fun createBitmap(rgb24Bytes: ByteArray, contrast: Int = 5): Bitmap {
         val width = 96
         val height = 64
 
@@ -117,12 +163,62 @@ class AppActivity : ComponentActivity() {
                 val r = rgb24Bytes[byteIndex].toInt() and 0xFF
                 val g = rgb24Bytes[byteIndex + 1].toInt() and 0xFF
                 val b = rgb24Bytes[byteIndex + 2].toInt() and 0xFF
-                pixels[i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+
+                // Apply contrast adjustment
+                val adjustedR = applyContrast(r, contrast)
+                val adjustedG = applyContrast(g, contrast)
+                val adjustedB = applyContrast(b, contrast)
+
+                pixels[i] = (0xFF shl 24) or (adjustedR shl 16) or (adjustedG shl 8) or adjustedB
             }
         }
 
         bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
         return bitmap
+    }
+
+    private fun applyContrast(colorValue: Int, contrast: Int): Int {
+        val clampedContrast = contrast.coerceIn(0, 9)
+
+        if (colorValue == 0xCC) {
+            return colorValue
+        }
+
+        val contrastMultiplier = when (clampedContrast) {
+            0 -> 0.2f
+            1 -> 0.4f
+            2 -> 0.6f
+            3 -> 0.8f
+            4 -> 1.0f
+            5 -> 1.2f
+            6 -> 1.4f
+            7 -> 1.6f
+            8 -> 1.8f
+            9 -> 2.0f
+            else -> 1.0f
+        }
+
+        val referenceValues = mapOf(
+            0x99 to 153,
+            0x66 to 102,
+            0x33 to 51
+        )
+
+        val referenceValue = referenceValues[colorValue]
+        if (referenceValue != null) {
+            val distanceFromMid = referenceValue - 128
+
+            val adjustedDistance = (distanceFromMid * contrastMultiplier).toInt()
+            val newValue = 128 + adjustedDistance
+
+            return newValue.coerceIn(0, 255)
+        }
+
+        val distanceFromMid = colorValue - 128
+        val adjustedDistance = (distanceFromMid * contrastMultiplier).toInt()
+        val newValue = 128 + adjustedDistance
+
+        return newValue.coerceIn(0, 255)
     }
 
 }
@@ -190,15 +286,15 @@ fun PWApp(pokeWalker: PocketWalkerNative, canvasBitmap: Bitmap?) {
         }
 
         PWButton(
-            pokeWalker, BUTTON_CENTER, size = 42, top = 260,
+            pokeWalker, BUTTON_CENTER, size = 46, top = 260,
             modifier = Modifier.align(Alignment.Center)
         )
         PWButton(
-            pokeWalker, BUTTON_LEFT, size = 32, top = 240, end = 128,
+            pokeWalker, BUTTON_LEFT, size = 36, top = 240, end = 128,
             modifier = Modifier.align(Alignment.Center)
         )
         PWButton(
-            pokeWalker, BUTTON_RIGHT, size = 32, top = 240, start = 128,
+            pokeWalker, BUTTON_RIGHT, size = 36, top = 240, start = 128,
             modifier = Modifier.align(Alignment.Center)
         )
     }
@@ -221,6 +317,8 @@ fun PWButton(
     val buttonColor = Color(0xFFF3F3F3)
     val pressedButtonColor = Color(0xFFDFDFDF)
 
+    val hapticFeedback = LocalHapticFeedback.current
+
     Box(
         modifier = modifier
             .padding(top = top.dp, bottom = bottom.dp, start = start.dp, end = end.dp)
@@ -228,10 +326,11 @@ fun PWButton(
                 detectTapGestures(
                     onPress = { offset ->
                         isPressed = true
+                        hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
                         pokeWalker.press(button)
                         tryAwaitRelease()
                         isPressed = false
-                        delay(350) // allow time for read to catch up, while still haivng button down time
+                        delay(100) // allow time for read to catch up, while still having button down time
                         pokeWalker.release(button)
                     }
                 )
