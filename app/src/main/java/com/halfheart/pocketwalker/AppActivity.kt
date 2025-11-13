@@ -1,10 +1,12 @@
 package com.halfheart.pocketwalker
 
 import AudioEngine
+import android.content.Context
 import android.graphics.Bitmap
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -37,13 +39,17 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.lifecycleScope
 import com.halfheart.pocketwalkerlib.BUTTON_CENTER
 import com.halfheart.pocketwalkerlib.BUTTON_LEFT
 import com.halfheart.pocketwalkerlib.BUTTON_RIGHT
 import com.halfheart.pocketwalkerlib.PocketWalkerNative
+import com.yourpackage.TcpSocket
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.util.function.Function
 import kotlin.concurrent.thread
+import kotlin.experimental.xor
 
 
 class AppActivity : ComponentActivity()  {
@@ -57,6 +63,8 @@ class AppActivity : ComponentActivity()  {
         0x666666,
         0x333333
     )
+
+    private var didInitialize: Boolean = false
 
     fun initializePokeWalker() {
         val romBytes = resources.openRawResource(R.raw.rom).readAllBytes()
@@ -77,27 +85,76 @@ class AppActivity : ComponentActivity()  {
         }
 
         val audioEngine = AudioEngine()
-
         pokeWalker.onAudio { freq: Float, isFullVolume: Boolean ->
-            if (freq > 100)
-                println(freq)
             audioEngine.render(freq, if (isFullVolume) 0.5f else 0.25f, 1.0f)
         }
-
 
         thread(priority = Thread.MAX_PRIORITY) {
             pokeWalker.start()
         }
     }
 
+    fun initializeTcp() {
+        val socket = TcpSocket()
+
+        socket.setOnConnect {
+            println("[TCP] Connected")
+        }
+
+        socket.setOnClose {
+            println("[TCP] Disconnected")
+        }
+
+        socket.setOnData { data ->
+            data.forEach { byte ->
+                println("RX: %02X".format(byte xor 0xAA.toByte()))
+                pokeWalker.receiveSci3(byte)
+            }
+        }
+
+        pokeWalker.onTransmitSci3 { byte ->
+            println("TX: %02X".format(byte xor 0xAA.toByte()))
+            socket.send(byteArrayOf(byte))
+        }
+
+        socket.connect("10.0.0.123", 8081)
+
+        thread {
+            Thread.sleep(3000)
+
+            while (true) {
+                if (!socket.isConnected() && !socket.isConnecting()) {
+                    println("Attempting reconnection...")
+                    socket.reconnect()
+                    Thread.sleep(5000)
+                } else {
+                    Thread.sleep(1000)
+                }
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
 
         setContent {
             PWApp(pokeWalker, canvasBitmap)
         }
 
-        initializePokeWalker()
+        if (!didInitialize)
+        {
+            didInitialize = true
+
+            sensorManager = applicationContext.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+            accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+            accelerometer?.let {
+                sensorManager.registerListener(sensorListener, it, SENSOR_INTERVAL_US)
+            }
+
+            initializePokeWalker()
+            initializeTcp()
+        }
     }
 
     override fun onStop() {
@@ -119,6 +176,32 @@ class AppActivity : ComponentActivity()  {
 
         pokeWalker.resume()
     }
+
+    private lateinit var sensorManager: SensorManager
+    private var accelerometer: Sensor? = null
+
+    private val SENSOR_TARGET_HZ = 50
+    private val SENSOR_INTERVAL_NS = 1_000_000_000L / SENSOR_TARGET_HZ
+    private val SENSOR_INTERVAL_US = 1_000_000 / SENSOR_TARGET_HZ
+    private var lastSensorTimestamp = 0L
+
+    private val sensorListener = object : SensorEventListener {
+        override fun onSensorChanged(event: SensorEvent) {
+            if (!didInitialize) return
+            if (event.timestamp - lastSensorTimestamp < SENSOR_INTERVAL_NS) return
+
+            lastSensorTimestamp = event.timestamp
+
+            val x = event.values[0] / SensorManager.GRAVITY_EARTH
+            val y = event.values[1] / SensorManager.GRAVITY_EARTH
+            val z = event.values[2] / SensorManager.GRAVITY_EARTH
+
+            pokeWalker.setAccelerationData(x, y, z)
+        }
+
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+    }
+
 
     private fun createBitmap(paletteIndices: ByteArray): Bitmap {
         val width = 96
@@ -144,33 +227,6 @@ class AppActivity : ComponentActivity()  {
             val adjustedB = applyContrast(b, contrast)
 
             pixels[i] = (0xFF shl 24) or (adjustedR shl 16) or (adjustedG shl 8) or adjustedB
-        }
-
-        bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
-        return bitmap
-    }
-
-    private fun createBitmap(rgb24Bytes: ByteArray, contrast: Int = 5): Bitmap {
-        val width = 96
-        val height = 64
-
-        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        val pixels = IntArray(width * height)
-
-        for (i in pixels.indices) {
-            val byteIndex = i * 3
-            if (byteIndex + 2 < rgb24Bytes.size) {
-                val r = rgb24Bytes[byteIndex].toInt() and 0xFF
-                val g = rgb24Bytes[byteIndex + 1].toInt() and 0xFF
-                val b = rgb24Bytes[byteIndex + 2].toInt() and 0xFF
-
-                // Apply contrast adjustment
-                val adjustedR = applyContrast(r, contrast)
-                val adjustedG = applyContrast(g, contrast)
-                val adjustedB = applyContrast(b, contrast)
-
-                pixels[i] = (0xFF shl 24) or (adjustedR shl 16) or (adjustedG shl 8) or adjustedB
-            }
         }
 
         bitmap.setPixels(pixels, 0, width, 0, 0, width, height)

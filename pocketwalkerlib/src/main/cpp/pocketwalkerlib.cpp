@@ -1,12 +1,11 @@
 #include <jni.h>
 #include "PocketWalkerState.h"
 #include "KotlinCallback.h"
+#include <android/log.h>
 
 class CallbackManager {
 private:
     static CallbackManager* instance;
-    jobject drawCallback = nullptr;
-    jobject audioCallback = nullptr;
 
     std::map<std::string, jobject> callbacks;
 
@@ -19,10 +18,6 @@ public:
     }
 
     void SetCallback(JNIEnv* env, jobject callback, std::string name) {
-        if (drawCallback) {
-            env->DeleteGlobalRef(drawCallback);
-        }
-
         callbacks[name] = callback ? env->NewGlobalRef(callback) : nullptr;
     }
 
@@ -182,4 +177,38 @@ Java_com_halfheart_pocketwalkerlib_PocketWalkerNative_getContrast(JNIEnv *env, j
     auto emulator = PocketWalkerState::Emulator();
 
     return (jbyte) emulator->GetContrast();
+}
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_halfheart_pocketwalkerlib_PocketWalkerNative_onTransmitSci3(JNIEnv *env, jobject thiz,
+                                                                     jobject callback) {
+    auto emulator = PocketWalkerState::Emulator();
+
+    CallbackManager::Instance().SetCallback(env, callback, "TransmitSCI3");
+
+    emulator->OnTransmitSci3([](uint8_t byte) {
+        jobject transmitCallback = CallbackManager::Instance().GetCallback("TransmitSCI3");
+        if (transmitCallback) {
+            jbyte signedByte = static_cast<jbyte>(static_cast<int8_t>(byte));
+            KotlinCallback::InvokeByteCallback(transmitCallback, signedByte);
+        }
+    });
+}
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_halfheart_pocketwalkerlib_PocketWalkerNative_receiveSci3(JNIEnv *env, jobject thiz,
+                                                                  jbyte byte) {
+    auto emulator = PocketWalkerState::Emulator();
+
+    emulator->ReceiveSci3((uint8_t) byte);
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_halfheart_pocketwalkerlib_PocketWalkerNative_setAccelerationData(JNIEnv *env, jobject thiz,
+                                                                          jfloat x, jfloat y,
+                                                                          jfloat z) {
+    auto emulator = PocketWalkerState::Emulator();
+
+    //emulator->SetAccelerationData(x, y, z);
 }

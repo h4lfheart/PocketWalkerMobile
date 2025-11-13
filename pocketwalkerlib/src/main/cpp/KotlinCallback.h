@@ -42,6 +42,19 @@ public:
         };
     }
 
+    static std::function<jobject(JNIEnv*, uint8_t)> ByteConverter() {
+        return [](JNIEnv* env, uint8_t value) -> jobject {
+            jclass byteClass = env->FindClass("java/lang/Byte");
+            jmethodID byteConstructor = env->GetMethodID(byteClass, "<init>", "(B)V");
+
+            jbyte signedByte = static_cast<jbyte>(value);
+
+            jobject byteObject = env->NewObject(byteClass, byteConstructor, signedByte);
+            env->DeleteLocalRef(byteClass);
+            return byteObject;
+        };
+    }
+
     static std::function<jobject(JNIEnv*, int)> IntConverter() {
         return [](JNIEnv* env, int value) -> jobject {
             jclass intClass = env->FindClass("java/lang/Integer");
@@ -131,6 +144,10 @@ public:
 
     static void InvokeFloatCallback(jobject callback, float value) {
         InvokeCallback<float>(callback, value, FloatConverter());
+    }
+
+    static void InvokeByteCallback(jobject callback, uint8_t value) {
+        InvokeCallback<uint8_t>(callback, value, ByteConverter());
     }
 
     static void InvokeIntCallback(jobject callback, int value) {
